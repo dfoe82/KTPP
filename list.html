@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Anwesenheitsliste</title>
+  <link rel="manifest" href="manifest.json">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <style>
+    body{font-family:Arial,sans-serif;padding:10px;background:#f9f9f9;box-sizing:border-box;}
+    #header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;}
+    #header label{font-weight:bold;} #header select,#header input{padding:4px;font-size:1em;}
+    .table-wrap{background:#fff;border:1px solid #ccc;max-height:55vh;overflow:auto;-webkit-overflow-scrolling:touch;margin-bottom:10px;}
+    table{border-collapse:collapse;width:100%;min-width:850px;}
+    th,td{border:1px solid #666;padding:6px 4px;text-align:center;font-size:0.85em;white-space:nowrap;}
+    th{background:#eee;}
+    input[type="time"],select,input[type="date"]{width:100%;box-sizing:border-box;}
+    input[type="checkbox"]{transform:scale(1.2);margin:0;}
+    tfoot td{background:#fafafa;font-weight:bold;}
+    .legend{background:#fff;border:1px solid #666;padding:6px 8px;font-size:0.85em;margin-bottom:10px;}
+    .legend ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:12px;}
+    .legend li{white-space:nowrap;}
+    #footer{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;}
+    canvas{border:1px solid #333;width:100%;max-width:200px;touch-action:none;}
+    button{padding:4px 8px;font-size:0.9em;}
+    @media print{body{padding:0}.table-wrap{border:none;max-height:none}table{min-width:unset;width:auto}th,td{font-size:0.75em}@page{size:A4;margin:10mm}}
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <label>Liste ID:</label>
+  <select id="listId"></select>
+  <label>Monat:</label>
+  <select id="month"></select>
+  <label>Jahr:</label>
+  <select id="year"></select>
+  <label>Kind:</label>
+  <select id="child"></select>
+  <label>KTPP:</label>
+  <input type="text" id="ctp">
+</div>
+
+<h1 style="text-align:center;">Anwesenheitsliste</h1>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Tag</th><th>Datum</th><th>von</th><th>bis</th><th>Std.</th>
+        <th>Bemerkung</th><th>M</th><th>KK</th><th>KU</th><th>KFU</th><th>KV</th><th>KFE</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" style="text-align:right;">Summe Mittagessen:</td>
+        <td id="sumMeals">0,00 €</td>
+        <td colspan="5"></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<div class="legend">
+  <strong>Legende:</strong>
+  <ul>
+    <li><strong>M</strong> Autom. Zeit</li>
+    <li><strong>KK</strong> Krank</li>
+    <li><strong>KU</strong> Urlaub</li>
+    <li><strong>KFU</strong> Fortbildung</li>
+    <li><strong>KV</strong> Weiteres</li>
+    <li><strong>KFE</strong> Zusatz</li>
+  </ul>
+</div>
+
+<div id="footer">
+  <div>
+    <label>Datum:</label>
+    <input type="date" id="recDate">
+  </div>
+  <div style="display:flex;gap:12px;">
+    <div>
+      <canvas id="sig1" width="200" height="100"></canvas><br>
+      <button onclick="clearSig('sig1')">Löschen</button>
+    </div>
+    <div>
+      <canvas id="sig2" width="200" height="100"></canvas><br>
+      <button onclick="clearSig('sig2')">Löschen</button>
+    </div>
+  </div>
+</div>
+
+<div style="text-align:center;margin-top:10px;">
+  <button onclick="exportPdf()">Als PDF speichern</button>
+</div>
+
+<script>
+  // Hilfsfunktionen
+  const params = new URLSearchParams(location.search);
+  const listParam = params.get('list') || '1';
+  const SETTINGS_KEY = 'anwSettings';
+  const STATE_KEY    = `attendanceState_list${listParam}`;
+
+  function €(n){return Number(n).toLocaleString('de-DE',{style:'currency',currency:'EUR'});}
+  function calcH(s,e){if(!s||!e) return '';let [h1,m1]=s.split(':'),[h2,m2]=e.split(':');let d=(+h2*60+ +m2)-(+h1*60+ +m1);return d>0?(d/60).toFixed(2):'';}
+
+  // Signaturen
+  function saveSig(c){localStorage.setItem(c.id,c.toDataURL());}
+  function loadSig(id){let c=document.getElementById(id),d=localStorage.getItem(id);if(d){let i=new Image();i.onload=()=>c.getContext('2d').drawImage(i,0,0);i.src=d;}}
+  function clearSig(id){let c=document.getElementById(id),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);localStorage.removeItem(id);}
+  function initSig(id){let c=document.getElementById(id),ctx=c.getContext('2d'),draw=false,pos=e=>{let r=c.getBoundingClientRect(),t=(e.touches?e.touches[0]:e);return{x:t.clientX-r.left,y:t.clientY-r.top}};c.addEventListener('mousedown',e=>{draw=true;ctx.beginPath();let p=pos(e);ctx.moveTo(p.x,p.y)});c.addEventListener('mousemove',e=>{if(draw){let p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke()}});c.addEventListener('mouseup',e=>{draw=false;saveSig(c)});['touchstart','touchmove','touchend'].forEach(evt=>c.addEventListener(evt,e=>{evt!=='touchend'? (draw=true,ctx.beginPath(),ctx.moveTo(...Object.values(pos(e)))):draw=false;saveSig(c)}));}
+
+  // PDF
+  function exportPdf(){
+    html2pdf().set({margin:[10,10,10,10],jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(document.body).save();
+  }
+
+  // State speichern/laden
+  function saveAll(){
+    const rows = [...document.querySelectorAll('#tbody tr')].map(r=>({
+      start:r.querySelector('[name=start]').value,
+      end:  r.querySelector('[name=end]').value,
+      rem:  r.querySelector('[name=remark]').value,
+      m:    r.querySelector('[name=m]').checked,
+      kk:   r.querySelector('[name=kk]').checked,
+      ku:   r.querySelector('[name=ku]').checked,
+      kfu:  r.querySelector('[name=kfu]').checked,
+      kv:   r.querySelector('[name=kv]').checked,
+      kfe:  r.querySelector('[name=kfe]').checked
+    }));
+    const hd = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    const st = {
+      header: { list: listParam, month: month.value, year: year.value, child: child.value, ctp: ctp.value },
+      table:  rows,
+      pay:    hd.pauschaleM,
+      date:   recDate.value
+    };
+    localStorage.setItem(STATE_KEY, JSON.stringify(st));
+    updateTotal();
+  }
+  function loadAll(){
+    const raw = localStorage.getItem(STATE_KEY);
+    if(!raw) return;
+    const st = JSON.parse(raw);
+    month.value = st.header.month;
+    year.value  = st.header.year;
+    child.value = st.header.child;
+    ctp.value   = st.header.ctp;
+    recDate.value = st.date;
+    document.querySelectorAll('#tbody tr').forEach((r,i)=>{const d=st.table[i];if(!d) return;
+      r.querySelector('[name=start]').value=d.start;
+      r.querySelector('[name=end]').value=d.end;
+      r.querySelector('[name=hours]').value=calcH(d.start,d.end);
+      r.querySelector('[name=remark]').value=d.rem;
+      ['m','kk','ku','kfu','kv','kfe'].forEach(n=>r.querySelector(`[name=${n}]`).checked=d[n]);
+    });
+    updateTotal();
+  }
+
+  // Header + Tabelle
+  let month, year, child, ctp, recDate;
+  function buildHeader(){
+    month = document.getElementById('month');
+    year  = document.getElementById('year');
+    child = document.getElementById('child');
+    ctp   = document.getElementById('ctp');
+    const hd = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    // Liste-ID Dropdown
+    const selList = document.getElementById('listId');
+    // z.B. bis 5, anpassbar
+    for(let i=1;i<=5;i++){
+      let o=new Option(`Liste ${i}`,i);
+      if(i==listParam) o.selected=true;
+      selList.add(o);
+    }
+    selList.addEventListener('change',()=>location.href=`list.html?list=${selList.value}`);
+    // Monat/Jahr
+    ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez']
+      .forEach((m,i)=>month.add(new Option(m,i+1)));
+    let Y=new Date().getFullYear();
+    for(let y=Y-2;y<=Y+2;y++) year.add(new Option(y,y));
+    // Kinder
+    hd.children.forEach(n=> child.add(new Option(n,n)));
+    child.addEventListener('change',saveAll);
+    // CTP
+    ctp.value = hd.caregiver;
+    ctp.addEventListener('change',saveAll);
+    // Default-Auswahl
+    month.value=new Date().getMonth()+1;
+    year.value=new Date().getFullYear();
+  }
+
+  function buildTable(){
+    const hd = JSON.parse(localStorage.getItem(SETTINGS_KEY)),
+          ds = hd.defaultStart, de = hd.defaultEnd,
+          days = new Date(+year.value,+month.value,0).getDate(),
+          tb = document.getElementById('tbody'),
+          wd = ['So.','Mo.','Di.','Mi.','Do.','Fr.','Sa.'];
+    tb.innerHTML='';
+    for(let i=1;i<=days;i++){
+      let D=new Date(+year.value,month.value-1,i),
+          tr=document.createElement('tr');
+      [wd[D.getDay()],i].forEach(v=>{let td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
+      // Inputs
+      let inpS=document.createElement('input'); inpS.type='time'; inpS.name='start';
+      let inpE=document.createElement('input'); inpE.type='time'; inpE.name='end';
+      let inpH=document.createElement('input'); inpH.name='hours'; inpH.readOnly=true;
+      [inpS,inpE].forEach(inp=>inp.addEventListener('change',()=>{inpH.value=calcH(inpS.value,inpE.value);saveAll();}));
+      [inpS,inpE,inpH].forEach(inp=>{let td=document.createElement('td');td.appendChild(inp);tr.appendChild(td);});
+      // Bemerkung
+      let sel=document.createElement('select'); sel.name='remark';
+      ['','geschlossen','Feiertag','Urlaub','KTPP krank'].forEach(o=>{
+        let opt=document.createElement('option'); opt.value=o; opt.text=o; sel.append(opt);
+      });
+      sel.addEventListener('change',saveAll);
+      let tdR=document.createElement('td');tdR.appendChild(sel);tr.appendChild(tdR);
+      // Checkboxen
+      ['m','kk','ku','kfu','kv','kfe'].forEach(n=>{
+        let td=document.createElement('td'), cb=document.createElement('input');
+        cb.type='checkbox'; cb.name=n;
+        if(n==='m') cb.addEventListener('change',()=>{
+          if(cb.checked){ inpS.value=ds; inpE.value=de; inpH.value=calcH(ds,de); }
+          saveAll(); updateTotal();
+        });
+        cb.addEventListener('change',saveAll);
+        td.appendChild(cb); tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    }
+  }
+
+  function updateTotal(){
+    const hd = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    const cnt = [...document.querySelectorAll('[name=m]')].filter(x=>x.checked).length;
+    document.getElementById('sumMeals').textContent = €((hd.pauschaleM||0)*cnt);
+  }
+
+  // init
+  window.addEventListener('DOMContentLoaded',()=>{
+    buildHeader();
+    buildTable();
+    recDate = document.getElementById('recDate');
+    recDate.addEventListener('change',saveAll);
+    saveAll(); loadAll();
+    initSig('sig1'); initSig('sig2'); loadSig('sig1'); loadSig('sig2');
+  });
+</script>
+</body>
+</html>
